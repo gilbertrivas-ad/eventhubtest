@@ -1,0 +1,42 @@
+# Keep the build context tiny — only files needed to run Playwright tests
+# end up in the image. Everything else is excluded so `docker build` is fast
+# even on a fresh clone.
+
+# Node / build artefacts
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+build
+
+# Backend / frontend apps — tests run against the deployed sandbox, no app code needed
+backend
+frontend
+
+# Test outputs (will be mounted as volumes anyway)
+playwright-report
+test-results
+.playwright-mcp
+
+# Repo metadata / tooling
+.git
+.github
+.claude
+.vscode
+.idea
+
+# Docs and local scratch
+docs
+*.md
+!playwright.config.ts
+
+# Env files — never bake secrets into images
+.env
+.env.*
+**/.env
+**/.env.local
+
+# OS
+.DS_Store
+Thumbs.db

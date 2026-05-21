@@ -107,6 +107,40 @@ npm run dev
 
 ---
 
+## Run Playwright tests in Docker (no local install)
+
+Clone the repo and run the suite without installing Node, npm, or browsers
+on your machine — only Docker is required.
+
+```bash
+docker compose run --rm tests
+```
+
+On the first run Docker pulls the Playwright base image (~1 GB) and installs
+JS deps; subsequent runs are fast because layers are cached.
+
+The HTML report is written to `./playwright-report/` on the host (volume mount),
+so open `playwright-report/index.html` in your browser after the run. Traces,
+screenshots, and videos for failures land in `./test-results/`.
+
+Useful variations:
+
+```bash
+# Run a single test by title pattern
+docker compose run --rm tests npx playwright test -g "TC-001"
+
+# Run a specific spec file
+docker compose run --rm tests npx playwright test tests/booking-flow.spec.js
+
+# Rebuild the image after changing Dockerfile or package.json
+docker compose build tests
+```
+
+Tests target the deployed sandbox (`https://eventhub.rahulshettyacademy.com`)
+defined in `playwright.config.ts` — no local backend/frontend is needed.
+
+---
+
 ## API Endpoints
 
 Base URL: `http://localhost:3001`

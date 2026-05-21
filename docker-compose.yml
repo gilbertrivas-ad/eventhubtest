@@ -1,0 +1,18 @@
+# One-command Playwright runner.
+#
+# Usage:
+#   docker compose run --rm tests                          # full suite
+#   docker compose run --rm tests npx playwright test -g X # subset by name
+#
+# Reports land on the host under ./playwright-report and ./test-results
+# (mounted volumes), so you can open playwright-report/index.html locally.
+
+services:
+  tests:
+    build: .
+    image: eventhub-tests:latest
+    # Playwright recommends host IPC for Chromium to avoid OOM/zombie issues.
+    ipc: host
+    volumes:
+      - ./playwright-report:/app/playwright-report
+      - ./test-results:/app/test-results
