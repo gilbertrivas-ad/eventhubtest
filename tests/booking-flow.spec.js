@@ -1,146 +1,160 @@
 import { test, expect } from '@playwright/test';
 
-const BASE_URL      = 'http://localhost:3000';
-
-// ── Credentials ────────────────────────────────────────────────────────────────
+// baseURL is configured in playwright.config.ts — use relative paths everywhere.
 const USER_EMAIL    = 'rahulshetty1@gmail.com';
 const USER_PASSWORD = 'Magiclife1!';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
+
 async function login(page) {
-  await page.goto(`${BASE_URL}/login`);
-
-  // Located by placeholder
+  await page.goto('/login');
   await page.getByPlaceholder('you@email.com').fill(USER_EMAIL);
-
-  // Located by label
   await page.getByLabel('Password').fill(USER_PASSWORD);
-
-  // Located by id
   await page.locator('#login-btn').click();
-
-  await expect(page.getByRole('link', { name: 'Browse Events →' })).toBeVisible();
+  await expect(page.getByRole('link', { name: /Browse Events/i }).first()).toBeVisible();
 }
 
-/** Returns a datetime-local string (YYYY-MM-DDTHH:mm) 1 year from now */
-function futureDateValue() {
-  const d   = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T10:00`;
-}
+/**
+ * Books the first available (non-sold-out) event on the events page.
+ * Returns { bookingRef, eventTitle } captured from the confirmation card.
+ * Precondition: user must be logged in.
+ */
+async function bookFirstAvailableEvent(page, { customerName = `QA User ${Date.now()}` } = {}) {
+  await page.goto('/events');
 
+  const firstBookableCard = page.getByTestId('event-card').filter({
+    has: page.getByTestId('book-now-btn'),
+  }).first();
+  await expect(firstBookableCard).toBeVisible();
 
-// ── Test ───────────────────────────────────────────────────────────────────────
-test('create event via UI, book it, and verify seat reduction', async ({ page }) => {
+  const eventTitle = (await firstBookableCard.getByRole('heading').textContent())?.trim() ?? '';
+  await firstBookableCard.getByTestId('book-now-btn').click();
+  await expect(page).toHaveURL(/\/events\/\d+/);
 
-  // ── Step 1: Log in ───────────────────────────────────────────────────────
-  await login(page);
-
-  // ── Step 2: Create a new event via the admin form ────────────────────────
-  await page.goto(`${BASE_URL}/admin/events`);
-
-  // Unique title so we can find this exact card later
-  const eventTitle = `Test Event ${Date.now()}`;
-
-  // Located by id (explicit on the component)
-  await page.locator('#event-title-input').fill(eventTitle);
-
-  // Description — only textarea in the form
-  await page.locator('#admin-event-form textarea').fill('Playwright test event');
-
-  // Located by label (Select auto-generates id from label text)
-  await page.getByLabel('City').fill('Test City');
-  await page.getByLabel('Venue').fill('Test Venue');
-
-  // datetime-local input — located by label
-  await page.getByLabel('Event Date & Time').fill(futureDateValue());
-
-  await page.getByLabel('Price ($)').fill('100');
-  await page.getByLabel('Total Seats').fill('50');
-
-  // Located by id
-  await page.locator('#add-event-btn').click();
-
-  // Wait for success toast
-  await expect(page.getByText('Event created!')).toBeVisible();
-
-  console.log(`Created event: "${eventTitle}"`);
-
-  // ── Step 3: Go to Events page and find the newly created card ─────────────
-  await page.goto(`${BASE_URL}/events`);
-
-  // Located by data-testid
-  const eventCards = page.getByTestId('event-card');
-  await expect(eventCards.first()).toBeVisible();
-
-  // Scan all visible event cards for the one matching our created title
-  const targetCard = eventCards.filter({ hasText: eventTitle }).first();
-  await expect(targetCard).toBeVisible({ timeout: 5000 });
-
-  // Capture seat count before booking
-  const seatsBeforeBooking = parseInt(await targetCard.getByText('seat').first().innerText());
-  console.log(`Seats before booking: ${seatsBeforeBooking}`);
-
-  // Located by data-testid inside the matched card
-  await targetCard.getByTestId('book-now-btn').click();
-
-  // ── Step 4: Fill the booking form ────────────────────────────────────────
-
-  // Quantity defaults to 1 — verify via id
-  const ticketCount = page.locator('#ticket-count');
-  await expect(ticketCount).toHaveText('1');
-
-  // Located by label
-  await page.getByLabel('Full Name').fill('Test Student');
-
-  // Located by id
-  await page.locator('#customer-email').fill('test.student@example.com');
-
-  // Located by placeholder
+  const stamp = Date.now();
+  await page.getByLabel('Full Name').fill(customerName);
+  await page.locator('#customer-email').fill(`qa+${stamp}@example.com`);
   await page.getByPlaceholder('+91 98765 43210').fill('9876543210');
+  await page.locator('#confirm-booking').click();
 
-  // Located by CSS class
-  await page.locator('.confirm-booking-btn').click();
+  const refEl = page.locator('.booking-ref').first(); // No data-testid available — file FE ticket.
+  await expect(refEl).toBeVisible();
+  const bookingRef = (await refEl.textContent())?.trim() ?? '';
+  return { bookingRef, eventTitle };
+}
 
-  // ── Step 5: Verify booking confirmation ──────────────────────────────────
+/**
+ * Clears all bookings via the UI. Safe to call when already empty.
+ */
+async function resetBookings(page) {
+  await page.goto('/bookings');
+  const alreadyEmpty = await page.getByText('No bookings yet').isVisible();
+  if (alreadyEmpty) return;
 
-  // Located by CSS class
-  const bookingRefEl = page.locator('.booking-ref').first();
-  await expect(bookingRefEl).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: /clear all bookings/i }).click();
+  await expect(page.getByText('No bookings yet')).toBeVisible();
+}
 
-  const bookingRef = (await bookingRefEl.innerText()).trim();
-  expect(bookingRef.charAt(0)).toBe(eventTitle.trim().charAt(0).toUpperCase());
+// ── Test Suite ─────────────────────────────────────────────────────────────────
 
-  console.log(`Booking confirmed. Ref: ${bookingRef}`);
+test.describe('Booking Flow — First 3 Critical E2E Journeys', () => {
 
-  // ── Step 6: Verify booking appears in My Bookings ────────────────────────
-  await page.getByRole('link', { name: 'View My Bookings' }).click();
-  await expect(page).toHaveURL(`${BASE_URL}/bookings`);
+  // TC-001 ─────────────────────────────────────────────────────────────────────
+  test('TC-001: bookings list renders a card for each existing booking', async ({ page }) => {
+    // -- Step 1: Login and reset state --
+    await login(page);
+    await resetBookings(page);
 
-  // Located by id
-  const bookingCards = page.locator('#booking-card');
-  await expect(bookingCards.first()).toBeVisible();
+    // -- Step 2: Create exactly one booking so we know what to assert against --
+    const { bookingRef, eventTitle } = await bookFirstAvailableEvent(page);
 
-  // Find the card that contains our booking ref (via CSS class inside the card)
-  const matchingCard = bookingCards.filter({ has: page.locator('.booking-ref', { hasText: bookingRef }) });
-  await expect(matchingCard).toBeVisible();
+    // -- Step 3: Navigate to /bookings --
+    await page.goto('/bookings');
 
-  // Verify event title also appears in the same card
-  await expect(matchingCard).toContainText(eventTitle);
+    // -- Step 4: Page header is correct --
+    await expect(page.getByRole('heading', { name: 'My Bookings' })).toBeVisible();
+    await expect(page.getByText('View and manage all your ticket bookings')).toBeVisible();
 
-  console.log(`Booking card found in My Bookings for ref: ${bookingRef}`);
+    // -- Step 5: "Clear all bookings" link is visible in the header --
+    await expect(page.getByRole('button', { name: /clear all bookings/i })).toBeVisible();
 
-  // ── Step 7: Verify seat count reduced on Events page ─────────────────────
-  await page.goto(`${BASE_URL}/events`);
-  await expect(eventCards.first()).toBeVisible();
+    // -- Step 6: A booking card for the new booking is rendered with the expected fields --
+    const card = page.getByTestId('booking-card').filter({ hasText: bookingRef });
+    await expect(card).toBeVisible();
+    await expect(card).toContainText(eventTitle);
+    await expect(card).toContainText('confirmed');
+    await expect(card).toContainText(bookingRef);
 
-  // Find the same event by title
-  const updatedCard       = eventCards.filter({ hasText: eventTitle }).first();
-  await expect(updatedCard).toBeVisible();
+    // -- Step 7: Card exposes the "View Details" link contract --
+    await expect(card.getByRole('link', { name: 'View Details' })).toBeVisible();
+  });
 
-  const seatsAfterBooking = parseInt(await updatedCard.getByText('seat').first().innerText());
-  console.log(`Seats after booking: ${seatsAfterBooking}`);
+  // TC-003 ─────────────────────────────────────────────────────────────────────
+  test('TC-003: cancel a booking from the detail page → toast + redirect + removed from list', async ({ page }) => {
+    // -- Step 1: Login, reset state, create one booking --
+    await login(page);
+    await resetBookings(page);
+    const { bookingRef } = await bookFirstAvailableEvent(page);
 
-  // Booked 1 ticket — count must drop by exactly 1
-  expect(seatsAfterBooking).toBe(seatsBeforeBooking - 1);
+    // -- Step 2: Open the booking detail page via the card's "View Details" link --
+    await page.goto('/bookings');
+    const card = page.getByTestId('booking-card').filter({ hasText: bookingRef });
+    await card.getByRole('link', { name: 'View Details' }).click();
+    await expect(page).toHaveURL(/\/bookings\/\d+/);
+
+    // -- Step 3: Trigger cancel from the detail page --
+    await page.getByRole('button', { name: 'Cancel Booking' }).click();
+
+    // -- Step 4: ConfirmDialog appears with the expected title and confirm button --
+    await expect(page.getByText('Cancel this booking?')).toBeVisible();
+    const confirmBtn = page.getByTestId('confirm-dialog-yes');
+    await expect(confirmBtn).toBeVisible();
+    await expect(confirmBtn).toHaveText(/Yes, cancel it/i);
+
+    // -- Step 5: Confirm the cancellation --
+    await confirmBtn.click();
+
+    // -- Step 6: Success toast appears and user is redirected to /bookings --
+    await expect(page.getByText('Booking cancelled successfully')).toBeVisible();
+    await expect(page).toHaveURL(/\/bookings$/);
+
+    // -- Step 7: The cancelled booking is no longer in the list --
+    await expect(page.getByTestId('booking-card').filter({ hasText: bookingRef })).toHaveCount(0);
+    await expect(page.getByText('No bookings yet')).toBeVisible();
+  });
+
+  // TC-005 ─────────────────────────────────────────────────────────────────────
+  test('TC-005: clear all bookings via native confirm() empties the list', async ({ page }) => {
+    // -- Step 1: Login, reset state --
+    await login(page);
+    await resetBookings(page);
+
+    // -- Step 2: Create two bookings (precondition: ≥ 2) --
+    await bookFirstAvailableEvent(page, { customerName: `QA User A ${Date.now()}` });
+    await bookFirstAvailableEvent(page, { customerName: `QA User B ${Date.now()}` });
+
+    // -- Step 3: Navigate to /bookings and confirm both cards are present --
+    await page.goto('/bookings');
+    const cards = page.getByTestId('booking-card');
+    await expect(cards).toHaveCount(2);
+
+    // -- Step 4: Accept the native confirm() dialog when Clear all is clicked --
+    page.once('dialog', async (dialog) => {
+      expect(dialog.type()).toBe('confirm');
+      expect(dialog.message()).toMatch(/clear all your bookings/i);
+      await dialog.accept();
+    });
+    await page.getByRole('button', { name: /clear all bookings/i }).click();
+
+    // -- Step 5: After the DELETE resolves, the empty state with Browse Events CTA renders --
+    await expect(page.getByText('No bookings yet')).toBeVisible();
+    await expect(
+      page.getByRole('main').getByRole('link', { name: 'Browse Events' })
+    ).toBeVisible();
+
+    // -- Step 6: No booking cards remain --
+    await expect(page.getByTestId('booking-card')).toHaveCount(0);
+  });
+
 });
